@@ -408,7 +408,7 @@ And then specifies our entry point
 
 ### EXECUTE!!!
 
-Теперь просто стоит указать наш конекст и вернуть поток 
+Now it's just a matter of specifying our endpoint and returning the stream.
 ```cpp
     // Set the context
     if (!SetThreadContext(pi.hThread,ctx))
