@@ -3,7 +3,7 @@ title: Remote Run PE
 layout: post
 ---
 
-## Remote Run PE 
+## Intro
 
 Hi , today I will tell you how we can execute PE in memory and how we can bypass defender by using this 
 
