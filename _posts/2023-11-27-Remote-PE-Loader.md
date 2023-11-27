@@ -186,9 +186,205 @@ How can we do that? Here's the code
 
 ## Running!
 
+We will load the PE file into the memory of the new process and run it from there.
 
 
+### Getting the main headers 
+First we need to get the two main headers. 
+NT and DOS, we have already seen how to check them, now let's get them.
 
+```cpp
+    // Getting the DOS header , 
+    // to get it we need to refer to the base address of the PE file 
+    PIMAGE_DOS_HEADER pDosHdr = (PIMAGE_DOS_HEADER)buff;
 
+    // NT header is obtained as a consequence of the sum 
+    // of the e_lfanew value from the DOS header and the base address. 
+    PIMAGE_NT_HEADERS pNtHdr = (PIMAGE_NT_HEADERS)(buff + pDosHdr->e_lfanew);
+```
 
+Once we have the basic headers, we will create a new process to run the PE file there. 
+
+### Creating process
+
+Let's now create a new instance of the current process.
+```cpp
+    // Is a structure used to store information about a new process created using the CreateProcess function.
+    PROCESS_INFORMATION pi;
+
+    // Used to set all bytes in the structure to 0
+    // This can be useful to avoid random values in the structure
+    ZeroMemory(&pi, sizeof(pi));
+
+    // The structure is needed to fill in the information at the start of the process 
+    STARTUPINFO si;
+
+    // Used to set all bytes in the structure to 0
+    // This can be useful to avoid random values in the structure
+    ZeroMemory(&si, sizeof(si));
+
+    // Wchar array, which will store the path to the current process with MAX_PATH length.
+    WCHAR wszFilePath[MAX_PATH];
+
+    // Is used to get the full path to the executable file of the current process
+    if (!GetModuleFileName(NULL, wszFilePath, sizeof(wszFilePath))){
+        DWORD error = GetLastError();
+        printf("[!] GetModuleFileName end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess, -2);
+        return;
+    }
+    //  Creating a new instance of the current process 
+    if (!CreateProcess(wszFilePath,NULL,NULL,NULL,TRUE,CREATE_SUSPENDED,NULL,NULL,&si,&pi)){
+        DWORD error = GetLastError();
+        printf("[!] CreateProcess end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess, -3);
+        return;
+    }
+```
+
+Now we should get the context of the thread. 
+We need this to prepare and start a new process that will execute the code from the PE file. 
+Let's go through the main points of the code.
+
+```cpp
+    // Allocate memory for the context structure
+    CONTEXT* ctx = LPCONTEXT(VirtualAlloc(NULL, sizeof(CONTEXT), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+
+    // Set context flag to FULL 
+    ctx->ContextFlags = CONTEXT_FULL;
+
+    // Check if the context information for the thread was successfully obtained
+    if (!GetThreadContext(pi.hThread, ctx)){
+        DWORD error = GetLastError();
+        printf("[!] GetThreadContext end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess, -4);
+        return;
+    }
+```
+
+Set the CONTEXT_FULL flag in the ContextFlags field of the CONTEXT structure. 
+This indicates that we need to get the complete thread execution context, including the values of all processor registers.
+
+Call GetThreadContext to get the current execution context of the thread in the newly created process.
+
+The general sense of all this is to get information about the state of the thread in the created process, in which further operations will take place to execute the PE file in memory.
+
+### Storage location 
+
+Now we need to allocate memory in the created process at the address ImageBase in OptionalHeader.
+What is this for? We will write our PE file there.
+Why there? To avoid conflicts with other modules.
+
+How do we allocate memory there ?  
+It's not a big deal :)
+
+```cpp
+    // Pointer to the image base
+	LPVOID lpImageBase = VirtualAllocEx(
+		pi.hProcess,
+		(LPVOID)(pNtHdr->OptionalHeader.ImageBase),
+		pNtHdr->OptionalHeader.SizeOfImage,
+		MEM_COMMIT | MEM_RESERVE,
+		PAGE_EXECUTE_READWRITE
+	);
+
+	if (lpImageBase == NULL) {
+		DWORD error = GetLastError();
+		printf("[!] VirtualAllocEx end with error %lu\n", error);
+	
+		TerminateProcess(pi.hProcess, -5);
+		return;
+	}
+```
+
+### Writing headers 
+
+After we have allocated the memory for our PE file, we need to write our chants.
+If you have read about PE structures, we immediately understood what this is for.
+Writing our headers is just for corrective work.
+
+Let's see how it works:
+```cpp
+    if (!WriteProcessMemory(pi.hProcess,lpImageBase,buff,pNtHdr->OptionalHeader.SizeOfHeaders,NULL)){
+        DWORD error = GetLastError();
+        printf("[!] WriteProcessMemory end with error %lu\n", error);
+
+        TerminateProcess(pi.hProcess,-6);
+        return;
+    }
+```
+This is where we write to the process memory from the buff buffer to the memory area in the new process.
+
+pi.hProcess - process descriptor of the process we are writing to.
+lpImageBase - memory location where the PE file is loaded.
+buff - buffer containing PE-file data.
+pNtHdr->OptionalHeader.SizeOfHeaders - size of PE-file headers
+
+Why is buff passed as write data? PE file headers are at the beginning of the file, 
+and because we know the size of all our headers, we pass buff as write data.
+
+### Writing all sections 
+
+Also, for correct operation we should write all the actions of our PE to memory.
+Let's see how to do it 
+
+First we need to get the number of sections of our PE file.
+This is stored in FileHeader.
+
+This is how we get the number of sections
+```cpp
+    pNtHdr->FileHeader.NumberOfSections
+```
+
+We will write all our sections through the loop, and with the number of sections, this is easy. 
+But where do we write them?
+The PE file stores the virtual address of the section, to get it. 
+we need to get the section structure itself.
+```cpp
+    pSectionHdr = PIMAGE_SECTION_HEADER(DWORD64(pNtHdr) + sizeof(IMAGE_NT_HEADERS) + iSection * sizeof(IMAGE_SECTION_HEADER));
+```
+
+Once we have the SECTION_HEADER , we just need to add the addresses , 
+for the section location of our PE file
+```cpp
+    (LPVOID)((DWORD64)(lpImageBase) + pSectionHdr->VirtualAddress)
+```
+
+To get the data , SECTION_HEADER has an offest , from the base address to the section pointer
+```cpp
+    (LPVOID)((DWORD64)(buff) + pSectionHdr->PointerToRawData)
+```
+
+Here is the loop that will write our sections to our PE file 
+```cpp
+    	// Write all sections 
+	for (SIZE_T iSection = 0; iSection < pNtHdr->FileHeader.NumberOfSections; ++iSection){
+		
+		// Pointer to section header 
+		pSectionHdr = PIMAGE_SECTION_HEADER(DWORD64(pNtHdr) + sizeof(IMAGE_NT_HEADERS) + iSection * sizeof(IMAGE_SECTION_HEADER));
+ 		
+		// Write Section
+		// 'buff' buffer pointer
+		// 'lpImageBase + pSectionHdr->VirtualAddress' virtual address in process memory where the data from the buffer will be copied.
+		// 'pSectionHdr->PointerToRawData' offset from the beginning of the file to the beginning of the source data for a particular section.
+		// This offset is used to calculate the address in the buffer from which the data for a given section should be taken.
+		if (!WriteProcessMemory(
+			pi.hProcess,
+			(LPVOID)((DWORD64)(lpImageBase) + pSectionHdr->VirtualAddress),
+			(LPVOID)((DWORD64)(buff) + pSectionHdr->PointerToRawData),
+			pSectionHdr->SizeOfRawData,
+			NULL
+		)){
+			DWORD error = GetLastError();
+			printf("[!] WriteProcessMemory end with error %lu\n", error);
+			
+			TerminateProcess(pi.hProcess,-7);
+			return;
+		}
+
+	}
+```
 
